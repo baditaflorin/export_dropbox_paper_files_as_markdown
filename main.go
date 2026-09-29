@@ -117,55 +117,73 @@ func main() {
 		log.Fatalf("Failed to create output directory: %v", err)
 	}
 
-	// Iterate over the file entries.
-	for _, entry := range res.Entries {
-		// We only care about files.
-		fileMeta, ok := entry.(*files.FileMetadata)
-		if !ok {
-			continue
-		}
-
-		// Only process files ending in ".paper"
-		if !strings.HasSuffix(fileMeta.Name, ".paper") {
-			if debugMode {
-				log.Printf("Skipping non-Paper file: %s", fileMeta.PathDisplay)
+	// PAGINATION FIX: Start a loop to handle multiple pages of results.
+	for {
+		// Iterate over the file entries for the current page.
+		for _, entry := range res.Entries {
+			// We only care about files.
+			fileMeta, ok := entry.(*files.FileMetadata)
+			if !ok {
+				continue
 			}
-			continue
+
+			// Only process files ending in ".paper"
+			if !strings.HasSuffix(fileMeta.Name, ".paper") {
+				if debugMode {
+					log.Printf("Skipping non-Paper file: %s", fileMeta.PathDisplay)
+				}
+				continue
+			}
+
+			fmt.Printf("Exporting Dropbox Paper doc: %s\n", fileMeta.PathDisplay)
+
+			// Use the file ID (which is in "id:..." format) for the export call.
+			exportedContent, err := exportFile(fileMeta.Id, accessToken)
+			if err != nil {
+				log.Printf("Failed to export file %s: %v", fileMeta.PathDisplay, err)
+				continue
+			}
+
+			// Remove the base folder prefix so that the local output preserves the relative path.
+			relativePath := strings.TrimPrefix(fileMeta.PathDisplay, baseFolder)
+			relativePath = strings.TrimPrefix(relativePath, "/") // Remove leading slash if any
+
+			// Construct the output file path: replace ".paper" extension with ".md".
+			outputPath := filepath.Join(outputDir, relativePath)
+			outputPath = strings.TrimSuffix(outputPath, ".paper") + ".md"
+
+			if debugMode {
+				log.Printf("Writing exported content to %s", outputPath)
+			}
+
+			// Ensure the output directory exists.
+			if err := os.MkdirAll(filepath.Dir(outputPath), os.ModePerm); err != nil {
+				log.Printf("Failed to create directory for %s: %v", outputPath, err)
+				continue
+			}
+
+			// Write the exported Markdown content to the output file.
+			if err := os.WriteFile(outputPath, []byte(exportedContent), 0644); err != nil {
+				log.Printf("Failed to write file %s: %v", outputPath, err)
+				continue
+			}
+
+			fmt.Printf("Exported and saved Paper doc as: %s\n", outputPath)
 		}
 
-		fmt.Printf("Exporting Dropbox Paper doc: %s\n", fileMeta.PathDisplay)
-
-		// Use the file ID (which is in "id:..." format) for the export call.
-		exportedContent, err := exportFile(fileMeta.Id, accessToken)
-		if err != nil {
-			log.Printf("Failed to export file %s: %v", fileMeta.PathDisplay, err)
-			continue
+		// PAGINATION FIX: Check if there are more files to fetch. If not, break the loop.
+		if !res.HasMore {
+			break
 		}
 
-		// Remove the base folder prefix so that the local output preserves the relative path.
-		relativePath := strings.TrimPrefix(fileMeta.PathDisplay, baseFolder)
-		relativePath = strings.TrimPrefix(relativePath, "/") // Remove leading slash if any
-
-		// Construct the output file path: replace ".paper" extension with ".md".
-		outputPath := filepath.Join(outputDir, relativePath)
-		outputPath = strings.TrimSuffix(outputPath, ".paper") + ".md"
-
+		// PAGINATION FIX: If there are more files, call ListFolderContinue to get the next page.
 		if debugMode {
-			log.Printf("Writing exported content to %s", outputPath)
+			log.Println("Fetching next page of files...")
 		}
-
-		// Ensure the output directory exists.
-		if err := os.MkdirAll(filepath.Dir(outputPath), os.ModePerm); err != nil {
-			log.Printf("Failed to create directory for %s: %v", outputPath, err)
-			continue
+		continueArg := files.NewListFolderContinueArg(res.Cursor)
+		res, err = dbx.ListFolderContinue(continueArg)
+		if err != nil {
+			log.Fatalf("Failed to get next page of files: %v", err)
 		}
-
-		// Write the exported Markdown content to the output file.
-		if err := os.WriteFile(outputPath, []byte(exportedContent), 0644); err != nil {
-			log.Printf("Failed to write file %s: %v", outputPath, err)
-			continue
-		}
-
-		fmt.Printf("Exported and saved Paper doc as: %s\n", outputPath)
 	}
 }
